@@ -63,7 +63,6 @@ app.post('/api/jobs', async (req, res) => {
       type: newJob.type
     }); 
   } catch (error) {
-    // This catches the panic and tells us exactly why it failed!
     console.error("❌ SERVER PANIC REASON (POST):", error.message);
     res.status(500).json({ error: "Failed to save job" }); 
   }
@@ -78,11 +77,11 @@ app.delete('/api/jobs/:id', async (req, res) => {
     console.error("❌ DELETE ERROR:", error.message);
     res.status(500).json({ error: "Failed to delete job" });
   }
+}); // <--- THIS IS THE BRACKET YOU WERE MISSING!
+
 // UPDATE: Edit an existing job in MongoDB
 app.put('/api/jobs/:id', async (req, res) => {
   try {
-    // Find the job by its ID and update it with the new data (req.body)
-    // { new: true } tells MongoDB to send back the updated version, not the old one!
     const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
     
     if (!updatedJob) {
@@ -102,7 +101,6 @@ app.put('/api/jobs/:id', async (req, res) => {
     res.status(500).json({ error: "Failed to update job" });
   }
 });  
-});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
