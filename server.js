@@ -78,6 +78,30 @@ app.delete('/api/jobs/:id', async (req, res) => {
     console.error("❌ DELETE ERROR:", error.message);
     res.status(500).json({ error: "Failed to delete job" });
   }
+// UPDATE: Edit an existing job in MongoDB
+app.put('/api/jobs/:id', async (req, res) => {
+  try {
+    // Find the job by its ID and update it with the new data (req.body)
+    // { new: true } tells MongoDB to send back the updated version, not the old one!
+    const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    
+    if (!updatedJob) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+
+    res.json({
+      id: updatedJob._id,
+      title: updatedJob.title,
+      company: updatedJob.company,
+      location: updatedJob.location,
+      salary: updatedJob.salary,
+      type: updatedJob.type
+    });
+  } catch (error) {
+    console.error("❌ UPDATE ERROR:", error.message);
+    res.status(500).json({ error: "Failed to update job" });
+  }
+});  
 });
 
 const PORT = process.env.PORT || 5000;
