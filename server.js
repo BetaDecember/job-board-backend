@@ -3,90 +3,78 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 
-// 1. Unlock the .env file
 dotenv.config(); 
 
 const app = express();
 app.use(cors()); 
 app.use(express.json()); 
 
-// 2. CONNECT TO THE VAULT
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('📦 Connected to MongoDB Vault!'))
   .catch(err => console.error('❌ MongoDB connection error:', err.message));
 
-// 3. DEFINE THE BLUEPRINT (Schema)
+// 🌟 NEW: Added applyUrl to the Blueprint!
 const jobSchema = new mongoose.Schema({
   title: String,
   company: String,
   location: String,
   salary: String,
-  type: String
+  type: String,
+  applyUrl: String 
 });
 
 const Job = mongoose.model('Job', jobSchema);
 
 // --- ROUTES ---
 
-// READ: Fetch all jobs from MongoDB
 app.get('/api/jobs', async (req, res) => {
   try {
     const jobs = await Job.find(); 
-    
     const formattedJobs = jobs.map(job => ({
-      id: job._id, // Format ID for React
+      id: job._id, 
       title: job.title,
       company: job.company,
       location: job.location,
       salary: job.salary,
-      type: job.type
+      type: job.type,
+      applyUrl: job.applyUrl // 🌟 Included in response
     }));
-    
     res.json(formattedJobs);
   } catch (error) {
-    console.error("❌ GET ERROR:", error.message);
     res.status(500).json({ error: "Failed to fetch jobs" });
   }
 });
 
-// CREATE: Save a new job to MongoDB
 app.post('/api/jobs', async (req, res) => {
   try {
     const newJob = await Job.create(req.body); 
-    
     res.status(201).json({
-      id: newJob._id, // Format ID for React
+      id: newJob._id, 
       title: newJob.title,
       company: newJob.company,
       location: newJob.location,
       salary: newJob.salary,
-      type: newJob.type
+      type: newJob.type,
+      applyUrl: newJob.applyUrl // 🌟 Included in response
     }); 
   } catch (error) {
-    console.error("❌ SERVER PANIC REASON (POST):", error.message);
     res.status(500).json({ error: "Failed to save job" }); 
   }
 });
 
-// DELETE: Remove a job from MongoDB
 app.delete('/api/jobs/:id', async (req, res) => {
   try {
     await Job.findByIdAndDelete(req.params.id); 
     res.json({ message: "Job deleted successfully" });
   } catch (error) {
-    console.error("❌ DELETE ERROR:", error.message);
     res.status(500).json({ error: "Failed to delete job" });
   }
-}); // <--- THIS IS THE BRACKET YOU WERE MISSING!
+}); 
 
-// UPDATE: Edit an existing job in MongoDB
 app.put('/api/jobs/:id', async (req, res) => {
   try {
     const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    
-    if (!updatedJob) {
-      return res.status(404).json({ error: "Job not found" });
-    }
+    if (!updatedJob) return res.status(404).json({ error: "Job not found" });
 
     res.json({
       id: updatedJob._id,
@@ -94,10 +82,10 @@ app.put('/api/jobs/:id', async (req, res) => {
       company: updatedJob.company,
       location: updatedJob.location,
       salary: updatedJob.salary,
-      type: updatedJob.type
+      type: updatedJob.type,
+      applyUrl: updatedJob.applyUrl // 🌟 Included in response
     });
   } catch (error) {
-    console.error("❌ UPDATE ERROR:", error.message);
     res.status(500).json({ error: "Failed to update job" });
   }
 });  
