@@ -3,9 +3,29 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 
+// 🛡️ NEW: Import our security tools
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+
 dotenv.config(); 
 
 const app = express();
+
+// 🛡️ NEW: Put on the Helmet! This hides server vulnerabilities from attackers.
+app.use(helmet()); 
+
+// 🛡️ NEW: Set up the Rate Limiter (The Bouncer for bots)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per 15 minutes
+  message: { error: "Too many requests from this IP, please try again after 15 minutes." },
+  standardHeaders: true, 
+  legacyHeaders: false, 
+});
+
+// Apply the rate limiter to all API routes
+app.use('/api/', limiter);
+
 app.use(cors()); 
 app.use(express.json()); 
 
@@ -24,22 +44,20 @@ const jobSchema = new mongoose.Schema({
 
 const Job = mongoose.model('Job', jobSchema);
 
-// 🛡️ NEW: THE BOUNCER
-// This function checks if the password sent from React matches your secret Vault password
+// 🛡️ THE ADMIN BOUNCER
 const requireAdmin = (req, res, next) => {
   const providedPassword = req.headers['x-admin-password'];
   
-  // We will set ADMIN_PASS in Render in the next step!
   if (providedPassword === process.env.ADMIN_PASS) {
-    next(); // ✅ Password matches! Let them through to the database.
+    next(); 
   } else {
-    res.status(401).json({ error: "Unauthorized: Incorrect admin password!" }); // ❌ Kick them out
+    res.status(401).json({ error: "Unauthorized: Incorrect admin password!" }); 
   }
 };
 
 // --- ROUTES ---
 
-// 📖 READ is public! Anyone can view jobs. (No Bouncer here)
+// 📖 READ is public!
 app.get('/api/jobs', async (req, res) => {
   try {
     const jobs = await Job.find(); 
@@ -53,7 +71,7 @@ app.get('/api/jobs', async (req, res) => {
   }
 });
 
-// 📝 CREATE is protected! (Notice the 'requireAdmin' in the middle)
+// 📝 CREATE is protected!
 app.post('/api/jobs', requireAdmin, async (req, res) => {
   try {
     const newJob = await Job.create(req.body); 
