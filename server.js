@@ -5,6 +5,9 @@ import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
+// 🛡️ NEW: Import our token generator
+import jwt from 'jsonwebtoken';
+
 dotenv.config(); 
 
 const app = express();
@@ -39,32 +42,53 @@ const jobSchema = new mongoose.Schema({
 
 const Job = mongoose.model('Job', jobSchema);
 
+// 🛡️ UPGRADED BOUNCER: Now checks for a valid VIP Badge (JWT) instead of a raw password
 const requireAdmin = (req, res, next) => {
-  const providedPassword = req.headers['x-admin-password'];
+  // Tokens usually come in the format: "Bearer eyJhbGciOi..."
+  const authHeader = req.headers.authorization;
   
-  if (providedPassword === process.env.ADMIN_PASS) {
-    next(); 
-  } else {
-    res.status(401).json({ error: "Unauthorized: Incorrect admin password!" }); 
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: "Unauthorized: No token provided!" });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+    // Verify the badge signature using our secret key
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // Store the VIP info in the request
+    next(); // Let them through!
+  } catch (error) {
+    res.status(401).json({ error: "Unauthorized: Invalid or expired token!" });
   }
 };
 
 // --- ROUTES ---
 
-// 📖 READ: Upgraded with Pagination and Sorting!
+// 🔐 NEW: LOGIN ROUTE (This generates the VIP Badge)
+app.post('/api/login', (req, res) => {
+  const { password } = req.body;
+
+  if (password === process.env.ADMIN_PASS) {
+    // Correct password! Create a token that expires in 24 hours
+    const token = jwt.sign(
+      { role: 'admin' }, 
+      process.env.JWT_SECRET, 
+      { expiresIn: '1d' }
+    );
+    res.json({ token });
+  } else {
+    res.status(401).json({ error: "Incorrect password" });
+  }
+});
+
+// 📖 READ: Public Pagination
 app.get('/api/jobs', async (req, res) => {
   try {
-    // 1. Get the page and limit from the URL (default to page 1, 10 jobs per page)
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    
-    // 2. Calculate how many jobs to skip
     const skip = (page - 1) * limit;
-
-    // 3. Get the total count of jobs in the database
     const totalJobs = await Job.countDocuments();
-
-    // 4. Fetch the specific chunk of jobs, sorting by newest first (-1)
     const jobs = await Job.find().sort({ _id: -1 }).skip(skip).limit(limit); 
     
     const formattedJobs = jobs.map(job => ({
@@ -72,20 +96,13 @@ app.get('/api/jobs', async (req, res) => {
       location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl 
     }));
     
-    // 5. Send back an object containing the jobs AND the pagination math
-    res.json({
-      jobs: formattedJobs,
-      currentPage: page,
-      totalPages: Math.ceil(totalJobs / limit),
-      totalJobs: totalJobs
-    });
+    res.json({ jobs: formattedJobs, currentPage: page, totalPages: Math.ceil(totalJobs / limit), totalJobs });
   } catch (error) {
-    console.error("❌ GET ERROR:", error.message);
     res.status(500).json({ error: "Failed to fetch jobs" });
   }
 });
 
-// 📝 CREATE
+// 📝 CREATE: Protected by JWT
 app.post('/api/jobs', requireAdmin, async (req, res) => {
   try {
     const newJob = await Job.create(req.body); 
@@ -98,7 +115,7 @@ app.post('/api/jobs', requireAdmin, async (req, res) => {
   }
 });
 
-// 🗑️ DELETE
+// 🗑️ DELETE: Protected by JWT
 app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     await Job.findByIdAndDelete(req.params.id); 
@@ -108,7 +125,7 @@ app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   }
 }); 
 
-// ✏️ UPDATE
+// ✏️ UPDATE: Protected by JWT
 app.put('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
