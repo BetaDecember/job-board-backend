@@ -2,8 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-
-// 🛡️ NEW: Import our security tools
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 
@@ -11,19 +9,16 @@ dotenv.config();
 
 const app = express();
 
-// 🛡️ NEW: Put on the Helmet! This hides server vulnerabilities from attackers.
 app.use(helmet()); 
 
-// 🛡️ NEW: Set up the Rate Limiter (The Bouncer for bots)
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per 15 minutes
+  windowMs: 15 * 60 * 1000, 
+  max: 100, 
   message: { error: "Too many requests from this IP, please try again after 15 minutes." },
   standardHeaders: true, 
   legacyHeaders: false, 
 });
 
-// Apply the rate limiter to all API routes
 app.use('/api/', limiter);
 
 app.use(cors()); 
@@ -44,7 +39,6 @@ const jobSchema = new mongoose.Schema({
 
 const Job = mongoose.model('Job', jobSchema);
 
-// 🛡️ THE ADMIN BOUNCER
 const requireAdmin = (req, res, next) => {
   const providedPassword = req.headers['x-admin-password'];
   
@@ -57,21 +51,41 @@ const requireAdmin = (req, res, next) => {
 
 // --- ROUTES ---
 
-// 📖 READ is public!
+// 📖 READ: Upgraded with Pagination and Sorting!
 app.get('/api/jobs', async (req, res) => {
   try {
-    const jobs = await Job.find(); 
+    // 1. Get the page and limit from the URL (default to page 1, 10 jobs per page)
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // 2. Calculate how many jobs to skip
+    const skip = (page - 1) * limit;
+
+    // 3. Get the total count of jobs in the database
+    const totalJobs = await Job.countDocuments();
+
+    // 4. Fetch the specific chunk of jobs, sorting by newest first (-1)
+    const jobs = await Job.find().sort({ _id: -1 }).skip(skip).limit(limit); 
+    
     const formattedJobs = jobs.map(job => ({
       id: job._id, title: job.title, company: job.company, 
       location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl 
     }));
-    res.json(formattedJobs);
+    
+    // 5. Send back an object containing the jobs AND the pagination math
+    res.json({
+      jobs: formattedJobs,
+      currentPage: page,
+      totalPages: Math.ceil(totalJobs / limit),
+      totalJobs: totalJobs
+    });
   } catch (error) {
+    console.error("❌ GET ERROR:", error.message);
     res.status(500).json({ error: "Failed to fetch jobs" });
   }
 });
 
-// 📝 CREATE is protected!
+// 📝 CREATE
 app.post('/api/jobs', requireAdmin, async (req, res) => {
   try {
     const newJob = await Job.create(req.body); 
@@ -84,7 +98,7 @@ app.post('/api/jobs', requireAdmin, async (req, res) => {
   }
 });
 
-// 🗑️ DELETE is protected!
+// 🗑️ DELETE
 app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     await Job.findByIdAndDelete(req.params.id); 
@@ -94,7 +108,7 @@ app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   }
 }); 
 
-// ✏️ UPDATE is protected!
+// ✏️ UPDATE
 app.put('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
