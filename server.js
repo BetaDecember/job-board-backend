@@ -4,8 +4,6 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-
-// 🛡️ NEW: Import our token generator
 import jwt from 'jsonwebtoken';
 
 dotenv.config(); 
@@ -31,33 +29,29 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('📦 Connected to MongoDB Vault!'))
   .catch(err => console.error('❌ MongoDB connection error:', err.message));
 
+// 🌟 UPGRADED SCHEMA: Added 'clicks' for Analytics!
 const jobSchema = new mongoose.Schema({
   title: String,
   company: String,
   location: String,
   salary: String,
   type: String,
-  applyUrl: String 
+  applyUrl: String,
+  clicks: { type: Number, default: 0 } // Starts at zero
 });
 
 const Job = mongoose.model('Job', jobSchema);
 
-// 🛡️ UPGRADED BOUNCER: Now checks for a valid VIP Badge (JWT) instead of a raw password
 const requireAdmin = (req, res, next) => {
-  // Tokens usually come in the format: "Bearer eyJhbGciOi..."
   const authHeader = req.headers.authorization;
-  
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: "Unauthorized: No token provided!" });
   }
-
   const token = authHeader.split(' ')[1];
-
   try {
-    // Verify the badge signature using our secret key
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // Store the VIP info in the request
-    next(); // Let them through!
+    req.user = decoded; 
+    next(); 
   } catch (error) {
     res.status(401).json({ error: "Unauthorized: Invalid or expired token!" });
   }
@@ -65,24 +59,18 @@ const requireAdmin = (req, res, next) => {
 
 // --- ROUTES ---
 
-// 🔐 NEW: LOGIN ROUTE (This generates the VIP Badge)
+// 🔐 LOGIN
 app.post('/api/login', (req, res) => {
   const { password } = req.body;
-
   if (password === process.env.ADMIN_PASS) {
-    // Correct password! Create a token that expires in 24 hours
-    const token = jwt.sign(
-      { role: 'admin' }, 
-      process.env.JWT_SECRET, 
-      { expiresIn: '1d' }
-    );
+    const token = jwt.sign({ role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1d' });
     res.json({ token });
   } else {
     res.status(401).json({ error: "Incorrect password" });
   }
 });
 
-// 📖 READ: Public Pagination
+// 📖 READ ALL (Paginated)
 app.get('/api/jobs', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -93,7 +81,7 @@ app.get('/api/jobs', async (req, res) => {
     
     const formattedJobs = jobs.map(job => ({
       id: job._id, title: job.title, company: job.company, 
-      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl 
+      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl, clicks: job.clicks 
     }));
     
     res.json({ jobs: formattedJobs, currentPage: page, totalPages: Math.ceil(totalJobs / limit), totalJobs });
@@ -102,20 +90,47 @@ app.get('/api/jobs', async (req, res) => {
   }
 });
 
-// 📝 CREATE: Protected by JWT
+// 🌟 NEW: READ ONE (For dedicated job pages - Option A)
+app.get('/api/jobs/:id', async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    
+    res.json({
+      id: job._id, title: job.title, company: job.company, 
+      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl, clicks: job.clicks
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch job" });
+  }
+});
+
+// 🌟 NEW: INCREMENT CLICKS (For Analytics - Option B)
+// Notice there is NO requireAdmin here, because public users click "Apply"
+app.patch('/api/jobs/:id/click', async (req, res) => {
+  try {
+    // $inc is a MongoDB superpower that means "increment by"
+    await Job.findByIdAndUpdate(req.params.id, { $inc: { clicks: 1 } });
+    res.json({ message: "Click tracked successfully" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to track click" });
+  }
+});
+
+// 📝 CREATE
 app.post('/api/jobs', requireAdmin, async (req, res) => {
   try {
     const newJob = await Job.create(req.body); 
     res.status(201).json({
       id: newJob._id, title: newJob.title, company: newJob.company,
-      location: newJob.location, salary: newJob.salary, type: newJob.type, applyUrl: newJob.applyUrl 
+      location: newJob.location, salary: newJob.salary, type: newJob.type, applyUrl: newJob.applyUrl, clicks: newJob.clicks 
     }); 
   } catch (error) {
     res.status(500).json({ error: "Failed to save job" }); 
   }
 });
 
-// 🗑️ DELETE: Protected by JWT
+// 🗑️ DELETE
 app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     await Job.findByIdAndDelete(req.params.id); 
@@ -125,7 +140,7 @@ app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   }
 }); 
 
-// ✏️ UPDATE: Protected by JWT
+// ✏️ UPDATE (For Full CRUD - Option C)
 app.put('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -133,7 +148,7 @@ app.put('/api/jobs/:id', requireAdmin, async (req, res) => {
 
     res.json({
       id: updatedJob._id, title: updatedJob.title, company: updatedJob.company,
-      location: updatedJob.location, salary: updatedJob.salary, type: updatedJob.type, applyUrl: updatedJob.applyUrl
+      location: updatedJob.location, salary: updatedJob.salary, type: updatedJob.type, applyUrl: updatedJob.applyUrl, clicks: updatedJob.clicks
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to update job" });
