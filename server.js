@@ -29,7 +29,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('📦 Connected to MongoDB Vault!'))
   .catch(err => console.error('❌ MongoDB connection error:', err.message));
 
-// 🌟 UPGRADED SCHEMA: Added 'clicks' for Analytics!
+// 🌟 UPGRADED SCHEMA: Added description and logoUrl!
 const jobSchema = new mongoose.Schema({
   title: String,
   company: String,
@@ -37,7 +37,9 @@ const jobSchema = new mongoose.Schema({
   salary: String,
   type: String,
   applyUrl: String,
-  clicks: { type: Number, default: 0 } // Starts at zero
+  clicks: { type: Number, default: 0 },
+  description: { type: String, default: '' }, // Option A
+  logoUrl: { type: String, default: '' }      // Option B
 });
 
 const Job = mongoose.model('Job', jobSchema);
@@ -79,9 +81,11 @@ app.get('/api/jobs', async (req, res) => {
     const totalJobs = await Job.countDocuments();
     const jobs = await Job.find().sort({ _id: -1 }).skip(skip).limit(limit); 
     
+    // 🌟 UPGRADED: Included description & logoUrl in the outgoing package
     const formattedJobs = jobs.map(job => ({
       id: job._id, title: job.title, company: job.company, 
-      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl, clicks: job.clicks 
+      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl, clicks: job.clicks,
+      description: job.description, logoUrl: job.logoUrl 
     }));
     
     res.json({ jobs: formattedJobs, currentPage: page, totalPages: Math.ceil(totalJobs / limit), totalJobs });
@@ -90,7 +94,7 @@ app.get('/api/jobs', async (req, res) => {
   }
 });
 
-// 🌟 NEW: READ ONE (For dedicated job pages - Option A)
+// 📖 READ ONE
 app.get('/api/jobs/:id', async (req, res) => {
   try {
     const job = await Job.findById(req.params.id);
@@ -98,18 +102,17 @@ app.get('/api/jobs/:id', async (req, res) => {
     
     res.json({
       id: job._id, title: job.title, company: job.company, 
-      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl, clicks: job.clicks
+      location: job.location, salary: job.salary, type: job.type, applyUrl: job.applyUrl, clicks: job.clicks,
+      description: job.description, logoUrl: job.logoUrl
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch job" });
   }
 });
 
-// 🌟 NEW: INCREMENT CLICKS (For Analytics - Option B)
-// Notice there is NO requireAdmin here, because public users click "Apply"
+// 📈 INCREMENT CLICKS
 app.patch('/api/jobs/:id/click', async (req, res) => {
   try {
-    // $inc is a MongoDB superpower that means "increment by"
     await Job.findByIdAndUpdate(req.params.id, { $inc: { clicks: 1 } });
     res.json({ message: "Click tracked successfully" });
   } catch (error) {
@@ -123,7 +126,8 @@ app.post('/api/jobs', requireAdmin, async (req, res) => {
     const newJob = await Job.create(req.body); 
     res.status(201).json({
       id: newJob._id, title: newJob.title, company: newJob.company,
-      location: newJob.location, salary: newJob.salary, type: newJob.type, applyUrl: newJob.applyUrl, clicks: newJob.clicks 
+      location: newJob.location, salary: newJob.salary, type: newJob.type, applyUrl: newJob.applyUrl, clicks: newJob.clicks,
+      description: newJob.description, logoUrl: newJob.logoUrl
     }); 
   } catch (error) {
     res.status(500).json({ error: "Failed to save job" }); 
@@ -140,7 +144,7 @@ app.delete('/api/jobs/:id', requireAdmin, async (req, res) => {
   }
 }); 
 
-// ✏️ UPDATE (For Full CRUD - Option C)
+// ✏️ UPDATE
 app.put('/api/jobs/:id', requireAdmin, async (req, res) => {
   try {
     const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -148,7 +152,8 @@ app.put('/api/jobs/:id', requireAdmin, async (req, res) => {
 
     res.json({
       id: updatedJob._id, title: updatedJob.title, company: updatedJob.company,
-      location: updatedJob.location, salary: updatedJob.salary, type: updatedJob.type, applyUrl: updatedJob.applyUrl, clicks: updatedJob.clicks
+      location: updatedJob.location, salary: updatedJob.salary, type: updatedJob.type, applyUrl: updatedJob.applyUrl, clicks: updatedJob.clicks,
+      description: updatedJob.description, logoUrl: updatedJob.logoUrl
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to update job" });
