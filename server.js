@@ -1,221 +1,220 @@
 import express from 'express';
-import cors from 'cors';
 import mongoose from 'mongoose';
+import cors from 'cors';
 import dotenv from 'dotenv';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
-import nodemailer from 'nodemailer';
-// 🌟 NEW: CLOUDINARY IMPORTS
+import jwt from 'jsonwebtoken';
+import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
-import multer from 'multer';
 
-dotenv.config(); 
+dotenv.config();
 
 const app = express();
-app.use(helmet()); 
+app.use(cors());
+app.use(express.json());
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, standardHeaders: true, legacyHeaders: false });
-app.use('/api/', limiter);
-app.use(cors()); 
-app.use(express.json()); 
-
-// --- DATABASE CONNECTION ---
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('📦 Connected to MongoDB Vault!'))
-  .catch(err => console.error('❌ MongoDB connection error:', err.message));
-
-// --- 🌟 CLOUDINARY CONFIGURATION ---
+// ==========================================
+// 1. CLOUDINARY & SECURE VAULT UPLOAD SETUP
+// ==========================================
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// 🌟 THE OFFICIAL SECURE PDF CONFIGURATION
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'zero_static_resumes',
-    format: async (req, file) => 'pdf', // Force PDF format
+    folder: 'resumes',
+    format: async (req, file) => 'pdf', // Forces Cloudinary to append .pdf to the URL
   },
 });
+
 const upload = multer({ storage: storage });
 
-// --- EMAIL CONFIGURATION (Gmail Bypass) ---
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-});
-const freeEmailProviders = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com', 'proton.me', 'protonmail.com'];
-
-// --- SCHEMAS ---
+// ==========================================
+// 2. MONGODB SCHEMAS & MODELS
+// ==========================================
 const jobSchema = new mongoose.Schema({
-  title: String, company: String, location: String, salary: String, type: String, applyUrl: String, clicks: { type: Number, default: 0 },
-  description: { type: String, default: '' }, logoUrl: { type: String, default: '' },
-  recruiterId: { type: mongoose.Schema.Types.ObjectId, ref: 'Recruiter' }
+  title: String,
+  company: String,
+  location: String,
+  salary: String,
+  type: String,
+  applyUrl: String,
+  description: String,
+  logoUrl: String,
+  clicks: { type: Number, default: 0 },
+  employerId: mongoose.Schema.Types.ObjectId,
+  createdAt: { type: Date, default: Date.now }
 });
-const Job = mongoose.model('Job', jobSchema);
 
-const recruiterSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true }, password: { type: String, required: true },
-  companyName: { type: String, required: true }, isVerified: { type: Boolean, default: false }, verificationToken: String
+const employerSchema = new mongoose.Schema({
+  companyName: String,
+  email: { type: String, unique: true },
+  password: { type: String, select: false }
 });
-const Recruiter = mongoose.model('Recruiter', recruiterSchema);
 
-// 🌟 NEW: CANDIDATE & APPLICATION SCHEMAS
 const candidateSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  resumeUrl: { type: String, default: '' },
-  resumeId: { type: String, default: '' }
-}, { timestamps: true });
+  name: String,
+  email: { type: String, unique: true },
+  password: { type: String, select: false },
+  resumeUrl: { type: String, default: '' }
+});
+
+const Job = mongoose.model('Job', jobSchema);
+const Employer = mongoose.model('Employer', employerSchema);
 const Candidate = mongoose.model('Candidate', candidateSchema);
 
-const applicationSchema = new mongoose.Schema({
-  jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job', required: true },
-  candidateId: { type: mongoose.Schema.Types.ObjectId, ref: 'Candidate', required: true },
-  recruiterId: { type: mongoose.Schema.Types.ObjectId, ref: 'Recruiter', required: true },
-  resumeUrl: { type: String, required: true },
-  status: { type: String, default: 'Pending', enum: ['Pending', 'Reviewed', 'Rejected', 'Accepted'] }
-}, { timestamps: true });
-applicationSchema.index({ jobId: 1, candidateId: 1 }, { unique: true }); // Prevent applying to the same job twice
-const Application = mongoose.model('Application', applicationSchema);
-
-// --- MIDDLEWARE ---
-const requireAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return res.status(401).json({ error: "Unauthorized: No token provided!" });
+// ==========================================
+// 3. AUTHENTICATION MIDDLEWARES
+// ==========================================
+const verifyEmployer = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Access denied" });
   try {
-    const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
-    req.user = decoded; next(); 
-  } catch (error) { res.status(401).json({ error: "Unauthorized: Invalid token!" }); }
+    req.employer = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
+    next();
+  } catch (err) { res.status(403).json({ error: "Invalid token" }); }
 };
 
-// --- ROUTES: RECRUITER AUTH ---
+const verifyCandidate = (req, res, next) => {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ error: "Access denied" });
+  try {
+    req.candidate = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
+    next();
+  } catch (err) { res.status(403).json({ error: "Invalid token" }); }
+};
+
+// ==========================================
+// 4. EMPLOYER AUTH ROUTES
+// ==========================================
 app.post('/api/register', async (req, res) => {
   try {
-    const { email, password, companyName } = req.body;
-    const domain = email.split('@')[1].toLowerCase();
-    
-    if (freeEmailProviders.includes(domain)) return res.status(400).json({ error: "Please use a corporate email address." });
-    if (await Recruiter.findOne({ email })) return res.status(400).json({ error: "Email already registered." });
-
+    const { companyName, email, password } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
-    const vToken = crypto.randomBytes(32).toString('hex');
-    await Recruiter.create({ email, password: hashedPassword, companyName, verificationToken: vToken });
-
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
-    const verifyLink = `${backendUrl}/api/verify/${vToken}`;
-
-    await transporter.sendMail({
-      from: `"Zero Static Team" <${process.env.EMAIL_USER}>`, to: email, subject: 'Verify your Employer Account',
-      html: `<h2>Welcome, ${companyName}!</h2><p>Click below to verify your account:</p><a href="${verifyLink}">Verify My Account</a>`
-    });
-
-    res.status(201).json({ message: "Registration successful! Please check your email." });
-  } catch (error) { res.status(500).json({ error: "Registration failed." }); }
-});
-
-app.get('/api/verify/:token', async (req, res) => {
-  try {
-    const recruiter = await Recruiter.findOne({ verificationToken: req.params.token });
-    if (!recruiter) return res.status(400).send("Invalid or expired verification link.");
-    recruiter.isVerified = true; recruiter.verificationToken = undefined; await recruiter.save();
-    res.send("<h1>Email Verified! 🚀</h1><p>You can now log in.</p>");
-  } catch (error) { res.status(500).send("Verification failed."); }
+    await Employer.create({ companyName, email, password: hashedPassword });
+    console.log(`✅ New Employer Registered: ${companyName}`); 
+    res.status(201).json({ message: "Registration successful" });
+  } catch (error) { res.status(400).json({ error: "Email already exists" }); }
 });
 
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const recruiter = await Recruiter.findOne({ email });
-    if (!recruiter || !recruiter.isVerified) return res.status(401).json({ error: "Invalid credentials or unverified email." });
-    if (!(await bcrypt.compare(password, recruiter.password))) return res.status(401).json({ error: "Invalid credentials" });
-    const token = jwt.sign({ id: recruiter._id, company: recruiter.companyName, role: 'recruiter' }, process.env.JWT_SECRET, { expiresIn: '1d' });
-    res.json({ token, companyName: recruiter.companyName });
-  } catch (error) { res.status(500).json({ error: "Login failed" }); }
+    const employer = await Employer.findOne({ email }).select('+password');
+    if (!employer || !(await bcrypt.compare(password, employer.password))) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    const token = jwt.sign({ id: employer._id, companyName: employer.companyName }, process.env.JWT_SECRET || 'fallback_secret');
+    res.json({ token, companyName: employer.companyName });
+  } catch (error) { res.status(500).json({ error: "Server error" }); }
 });
 
-// --- 🌟 ROUTES: CANDIDATE AUTH & RESUMES ---
+// ==========================================
+// 5. JOB BOARD ROUTES
+// ==========================================
+app.get('/api/jobs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    const jobs = await Job.find().sort({ createdAt: -1 }).skip(skip).limit(limit);
+    const totalJobs = await Job.countDocuments();
+    
+    const formattedJobs = jobs.map(j => ({ ...j._doc, id: j._id }));
+    res.json({ jobs: formattedJobs, totalPages: Math.ceil(totalJobs / limit) });
+  } catch (err) { res.status(500).json({ error: "Server error" }); }
+});
+
+app.get('/api/jobs/:id', async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) return res.status(404).json({ error: "Job not found" });
+    res.json({ ...job._doc, id: job._id });
+  } catch (err) { res.status(500).json({ error: "Server error" }); }
+});
+
+app.patch('/api/jobs/:id/click', async (req, res) => {
+  try {
+    await Job.findByIdAndUpdate(req.params.id, { $inc: { clicks: 1 } });
+    res.json({ message: "Click recorded" });
+  } catch (err) { res.status(500).json({ error: "Server error" }); }
+});
+
+// Protected Employer Routes
+app.post('/api/jobs', verifyEmployer, async (req, res) => {
+  try {
+    const newJob = await Job.create({ ...req.body, company: req.employer.companyName, employerId: req.employer.id });
+    res.status(201).json({ ...newJob._doc, id: newJob._id });
+  } catch (err) { res.status(500).json({ error: "Failed to create job" }); }
+});
+
+app.put('/api/jobs/:id', verifyEmployer, async (req, res) => {
+  try {
+    const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json({ ...updatedJob._doc, id: updatedJob._id });
+  } catch (err) { res.status(500).json({ error: "Failed to update job" }); }
+});
+
+app.delete('/api/jobs/:id', verifyEmployer, async (req, res) => {
+  try {
+    await Job.findByIdAndDelete(req.params.id);
+    res.json({ message: "Job deleted" });
+  } catch (err) { res.status(500).json({ error: "Failed to delete job" }); }
+});
+
+// ==========================================
+// 6. CANDIDATE VAULT ROUTES
+// ==========================================
 app.post('/api/candidate/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
-    if (await Candidate.findOne({ email })) return res.status(400).json({ error: "Email already exists." });
     const hashedPassword = await bcrypt.hash(password, 10);
     await Candidate.create({ name, email, password: hashedPassword });
-    res.status(201).json({ message: "Candidate registered successfully!" });
-  } catch (error) { res.status(500).json({ error: "Registration failed." }); }
+    res.status(201).json({ message: "Candidate registered successfully" });
+  } catch (error) { res.status(400).json({ error: "Email already exists" }); }
 });
 
 app.post('/api/candidate/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const candidate = await Candidate.findOne({ email });
-    if (!candidate || !(await bcrypt.compare(password, candidate.password))) return res.status(401).json({ error: "Invalid credentials" });
-    const token = jwt.sign({ id: candidate._id, name: candidate.name, role: 'candidate' }, process.env.JWT_SECRET, { expiresIn: '1d' });
-    res.json({ token, name: candidate.name, resumeUrl: candidate.resumeUrl });
-  } catch (error) { res.status(500).json({ error: "Login failed" }); }
+    const candidate = await Candidate.findOne({ email }).select('+password');
+    if (!candidate || !(await bcrypt.compare(password, candidate.password))) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    const token = jwt.sign({ id: candidate._id }, process.env.JWT_SECRET || 'fallback_secret');
+    res.json({ token, resumeUrl: candidate.resumeUrl });
+  } catch (error) { res.status(500).json({ error: "Server error" }); }
 });
 
-app.post('/api/candidate/resume', requireAuth, upload.single('resume'), async (req, res) => {
+// 🌟 THE PDF UPLOAD ROUTE
+app.post('/api/candidate/resume', verifyCandidate, upload.single('resume'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded." });
-    if (req.user.role !== 'candidate') return res.status(403).json({ error: "Only candidates can upload resumes." });
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-    const candidate = await Candidate.findByIdAndUpdate(
-      req.user.id, { resumeUrl: req.file.path, resumeId: req.file.filename }, { new: true }
-    );
-    res.json({ message: "Resume uploaded securely!", resumeUrl: candidate.resumeUrl });
-  } catch (error) { res.status(500).json({ error: "Failed to upload resume." }); }
+    // req.file.path contains the secure Cloudinary URL
+    const secureUrl = req.file.path; 
+
+    await Candidate.findByIdAndUpdate(req.candidate.id, { resumeUrl: secureUrl });
+    res.json({ resumeUrl: secureUrl });
+  } catch (error) { 
+    console.error("Upload error:", error);
+    res.status(500).json({ error: "Failed to upload to vault" }); 
+  }
 });
 
-// --- ROUTES: JOBS ---
-app.get('/api/jobs', async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1; const limit = parseInt(req.query.limit) || 10;
-    const jobs = await Job.find().sort({ _id: -1 }).skip((page - 1) * limit).limit(limit); 
-    const totalJobs = await Job.countDocuments();
-    res.json({ jobs: jobs.map(j => ({ id: j._id, ...j._doc })), currentPage: page, totalPages: Math.ceil(totalJobs / limit), totalJobs });
-  } catch (error) { res.status(500).json({ error: "Failed to fetch jobs" }); }
-});
-
-app.get('/api/jobs/:id', async (req, res) => {
-  try {
-    const j = await Job.findById(req.params.id);
-    if (!j) return res.status(404).json({ error: "Job not found" });
-    res.json({ id: j._id, ...j._doc });
-  } catch (error) { res.status(500).json({ error: "Failed to fetch job" }); }
-});
-
-app.patch('/api/jobs/:id/click', async (req, res) => {
-  try { await Job.findByIdAndUpdate(req.params.id, { $inc: { clicks: 1 } }); res.json({ message: "Click tracked" }); } 
-  catch (error) { res.status(500).json({ error: "Failed to track click" }); }
-});
-
-app.post('/api/jobs', requireAuth, async (req, res) => {
-  try {
-    if (req.user.role !== 'recruiter') return res.status(403).json({ error: "Only recruiters can post jobs." });
-    const newJob = await Job.create({ ...req.body, recruiterId: req.user.id, company: req.user.company }); 
-    res.status(201).json({ id: newJob._id, ...newJob._doc }); 
-  } catch (error) { res.status(500).json({ error: "Failed to save job" }); }
-});
-
-app.delete('/api/jobs/:id', requireAuth, async (req, res) => {
-  try { await Job.findByIdAndDelete(req.params.id); res.json({ message: "Job deleted" }); } 
-  catch (error) { res.status(500).json({ error: "Failed to delete" }); }
-}); 
-
-app.put('/api/jobs/:id', requireAuth, async (req, res) => {
-  try {
-    const updatedJob = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!updatedJob) return res.status(404).json({ error: "Job not found" });
-    res.json({ id: updatedJob._id, ...updatedJob._doc });
-  } catch (error) { res.status(500).json({ error: "Failed to update" }); }
-});  
-
+// ==========================================
+// 7. SERVER INITIALIZATION
+// ==========================================
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`✅ Server is live on http://localhost:${PORT}`));
+mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/jobboard')
+  .then(() => {
+    console.log("✅ Connected to MongoDB");
+    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  })
+  .catch(err => console.error("❌ MongoDB connection error:", err));
